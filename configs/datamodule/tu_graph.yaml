@@ -8,3 +8,4 @@ pin_memory: False
 transform: "fast_scatter"
 transform_args:
   alpha: 0
+  power: 2
