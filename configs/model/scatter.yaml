@@ -10,4 +10,3 @@ optimizer:
 net:
   _partial_: true
   _target_: src.models.components.scatter_net.ScatterSVM
-

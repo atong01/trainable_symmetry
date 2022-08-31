@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import ConcatDataset, random_split
-from torch_geometric.loader import DataLoader
 from torch_geometric.datasets import QM9, TUDataset
+from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import Compose, Distance
 
 from .components.fast_scatter import FastScatterTransform
@@ -62,7 +62,7 @@ def get_transform(name, device, **kwargs):
 
 
 def frac_to_num(arr, total):
-    """convert train_val_test split expressed as fractions to the total"""
+    """convert train_val_test split expressed as fractions to the total."""
     # Good approximation
     x = np.floor(np.array(arr) * total)
     tot = x.sum()
@@ -95,9 +95,11 @@ class TUGraphDataModule(LightningDataModule):
         transform: Optional[str] = None,
         transform_args: Optional[dict] = None,
         data_dir: str = "data/",
-        train_val_test_split: Union[
-            Tuple[int, int, int], Tuple[float, float, float]
-        ] = (0.8, 0.1, 0.1),
+        train_val_test_split: Union[Tuple[int, int, int], Tuple[float, float, float]] = (
+            0.8,
+            0.1,
+            0.1,
+        ),
         batch_size: int = 64,
         num_workers: int = 0,
         pin_memory: bool = False,

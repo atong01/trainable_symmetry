@@ -24,7 +24,7 @@ class ScatterLitModule(LightningModule):
 
         # loss function
         self.criterion = torch.nn.CrossEntropyLoss()
-        #self.criterion = torch.nn.MultiLabelMarginLoss()
+        # self.criterion = torch.nn.MultiLabelMarginLoss()
 
         # use separate metric instance for train, val and test step
         # to ensure a proper reduction over the epoch
@@ -79,9 +79,7 @@ class ScatterLitModule(LightningModule):
     def validation_epoch_end(self, outputs: List[Any]):
         acc = self.val_acc.compute()  # get val accuracy from current epoch
         self.val_acc_best.update(acc)
-        self.log(
-            "val/acc_best", self.val_acc_best.compute(), on_epoch=True, prog_bar=True
-        )
+        self.log("val/acc_best", self.val_acc_best.compute(), on_epoch=True, prog_bar=True)
         self.val_acc.reset()
 
     def test_step(self, batch: Any, batch_idx: int):
