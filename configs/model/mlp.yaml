@@ -1,0 +1,16 @@
+_target_: src.models.scatter_module.ScatterLitModule
+_partial_: true
+
+optimizer:
+  _partial_: true
+  _target_: torch.optim.Adam
+  lr: 0.001
+  weight_decay: 0.0
+
+net:
+  _partial_: true
+  _target_: src.models.components.scatter_net.MLP
+  hidden_dims:
+    - 64
+    - 64
+    - 64
