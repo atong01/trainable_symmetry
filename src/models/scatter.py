@@ -1,26 +1,32 @@
+from typing import Optional
+
 import numpy as np
 import torch
-from torch.nn import Linear
 from torch_geometric.nn import MessagePassing
-from torch_geometric.utils import degree, to_dense_adj
+from torch_geometric.typing import OptTensor
+from torch_geometric.utils import (
+    add_self_loops,
+    degree,
+    get_laplacian,
+    remove_self_loops,
+    to_dense_adj,
+    to_undirected,
+)
 from torch_geometric.utils.num_nodes import maybe_num_nodes
-from torch_scatter import scatter_add, scatter_mean
+from torch_scatter import scatter_add
 
 
 # TODO (alex) this is pretty inefficient using a for loop, is there a faster way to do this?
 # TODO (alex) only scatter higher diffusions using masking
 def scatter_moments(graph, batch_indices, moments_returned=4):
-    """Compute specified statistical coefficients for each feature of each graph passed.
-
-    The graphs expected are disjoint subgraphs within a single graph, whose feature tensor is
-    passed as argument "graph." "batch_indices" connects each feature tensor to its home graph.
-    "Moments_returned" specifies the number of statistical measurements to compute. If 1, only the
-    mean is returned. If 2, the mean and variance. If 3, the mean, variance, and skew. If 4, the
-    mean, variance, skew, and kurtosis. The output is a dictionary. You can obtain the mean by
-    calling output["mean"] or output["skew"], etc.
-    """
+    """Compute specified statistical coefficients for each feature of each graph passed. The graphs expected are disjoint subgraphs within a single graph, whose feature tensor is passed as argument "graph."
+    "batch_indices" connects each feature tensor to its home graph.
+    "Moments_returned" specifies the number of statistical measurements to compute. If 1, only the mean is returned. If 2, the mean and variance. If 3, the mean, variance, and skew. If 4, the mean, variance, skew, and kurtosis.
+    The output is a dictionary. You can obtain the mean by calling output["mean"] or output["skew"], etc."""
     # Step 1: Aggregate the features of each mini-batch graph into its own tensor
-    graph_features = [torch.zeros(0).to(graph) for i in range(torch.max(batch_indices) + 1)]
+    graph_features = [
+        torch.zeros(0).to(graph) for i in range(torch.max(batch_indices) + 1)
+    ]
     for i, node_features in enumerate(
         graph
     ):  # Sort the graph features by graph, according to batch_indices. For each graph, create a tensor whose first row is the first element of each feature, etc.
@@ -28,12 +34,13 @@ def scatter_moments(graph, batch_indices, moments_returned=4):
         if (
             len(graph_features[batch_indices[i]]) == 0
         ):  # If this is the first feature added to this graph, fill it in with the features.
-            graph_features[batch_indices[i]] = node_features.view(
+            graph_features[batch_indices[i]] = node_features.reshape(
                 -1, 1, 1
             )  # .view(-1,1,1) changes [1,2,3] to [[1],[2],[3]],so that we can add each column to the respective row.
         else:
             graph_features[batch_indices[i]] = torch.cat(
-                (graph_features[batch_indices[i]], node_features.view(-1, 1, 1)), dim=1
+                (graph_features[batch_indices[i]], node_features.reshape(-1, 1, 1)),
+                dim=1,
             )  # concatenates along columns
 
     statistical_moments = {"mean": torch.zeros(0).to(graph)}
@@ -52,7 +59,9 @@ def scatter_moments(graph, batch_indices, moments_returned=4):
 
         mean = torch.mean(data, dim=1, keepdim=True)
         if moments_returned >= 1:
-            statistical_moments["mean"] = torch.cat((statistical_moments["mean"], mean.T), dim=0)
+            statistical_moments["mean"] = torch.cat(
+                (statistical_moments["mean"], mean.T), dim=0
+            )
 
         # produce matrix whose every row is data row - mean of data row
 
@@ -72,7 +81,9 @@ def scatter_moments(graph, batch_indices, moments_returned=4):
 
         # skew: 3rd moment divided by cubed standard deviation (sd = sqrt variance), with correction for division by zero (inf -> 0)
         skew = m(3) / (variance ** (3 / 2))
-        skew[skew > 1000000000000000] = 0  # multivalued tensor division by zero produces inf
+        skew[
+            skew > 1000000000000000
+        ] = 0  # multivalued tensor division by zero produces inf
         skew[
             skew != skew
         ] = 0  # single valued division by 0 produces nan. In both cases we replace with 0.
@@ -96,9 +107,8 @@ def scatter_moments(graph, batch_indices, moments_returned=4):
 
 
 class LazyLayer(torch.nn.Module):
-    """Currently a single elementwise multiplication with one laziness parameter per channel.
-
-    this is run through a softmax so that this is a real laziness parameter
+    """Currently a single elementwise multiplication with one laziness parameter per
+    channel. this is run through a softmax so that this is a real laziness parameter
     """
 
     def __init__(self, n):
@@ -126,7 +136,9 @@ def gcn_norm(
     num_nodes = maybe_num_nodes(edge_index, num_nodes)
 
     if edge_weight is None:
-        edge_weight = torch.ones((edge_index.size(1),), dtype=dtype, device=edge_index.device)
+        edge_weight = torch.ones(
+            (edge_index.size(1),), dtype=dtype, device=edge_index.device
+        )
 
     if add_self_loops:
         edge_index, tmp_edge_weight = add_remaining_self_loops(
@@ -146,7 +158,7 @@ def gcn_norm(
 
 
 class Diffuse(MessagePassing):
-    """Implements low pass walk with optional weights."""
+    """Implements low pass walk with optional weights"""
 
     def __init__(
         self,
@@ -209,70 +221,284 @@ class Diffuse(MessagePassing):
         return aggr_out
 
 
-class Diffuse_W1(Diffuse):
-    def forward(self, x, edge_index, edge_weight=None):
-        # x has shape [N, in_channels]
-        # edge_index has shape [2, E]
+class ScatterW1(torch.nn.Module):
+    def __init__(self, in_channels, trainable_laziness=False, agg="moment", alpha=0):
+        super().__init__()
+        self.agg = agg
+        if self.agg == "moment":
+            self.agg_fn = scatter_moments
+        elif self.agg is None:
+            self.agg_fn = None
+        self.in_channels = in_channels
+        self.trainable_laziness = trainable_laziness
+        self.alpha = alpha
+        self.alpha0 = -0.5 + alpha
+        self.alpha1 = -0.5 - alpha
 
-        # Step 2: Linearly transform node feature matrix.
-        # turn off this step for simplicity
-        if not self.fixed_weights:
-            x = self.lin(x)
-
-        # Step 3: Compute normalization
-        edge_index, edge_weight = gcn_norm(
-            edge_index,
-            edge_weight,
-            x.size(self.node_dim),
-            dtype=x.dtype,
-            alpha0=self.alpha0,
-            alpha1=self.alpha1,
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index
+        edge_weight = torch.ones(
+            (edge_index.size(1),), dtype=x.dtype, device=edge_index.device
         )
 
+        row, col = edge_index[0], edge_index[1]
+        num_nodes = maybe_num_nodes(edge_index, x.size(0))
+        deg = scatter_add(edge_weight, col, dim=0, dim_size=num_nodes)
+        deg_half = deg.pow(-0.5)
+        deg_half.masked_fill_(deg_half == float("inf"), 0)
+
+        edge_weight = deg_half[row] * edge_weight * deg_half[col]
+
+        # T = 0.5 * (
+        #    to_dense_adj(edge_index, edge_attr=edge_weight) + torch.eye(num_nodes)
+        # )
+        T = to_dense_adj(edge_index, edge_attr=edge_weight)
+        # p(K) = M^{-1} p(T) M
+
+        deg0 = deg.pow(self.alpha0 + 0.5)
+        deg1 = deg.pow(self.alpha1 + 0.5)
+        deg0.masked_fill_(deg0 == float("inf"), 0)
+        deg1.masked_fill_(deg1 == float("inf"), 0)
+
+        T = torch.squeeze(T)
+        L, Q = torch.linalg.eigh(T)
+
+        # TODO or f1 = 1?
+        # f1 = torch.sqrt(1)
+        f2 = L - L**2
+        f3 = L**2 - L**4
+        f4 = L**4 - L**8
+        f5 = L**8 - L**16
+        fs = [f2, f3, f4, f5]
+        fs = [torch.sqrt(torch.clamp(f, min=0)) for f in fs]
+        phi_list = []
+        for f in fs:
+            phi_list.append(
+                torch.diag_embed(deg0)
+                @ Q
+                @ torch.diag_embed(f)
+                @ Q.T
+                @ torch.diag_embed(deg1)
+                @ x
+            )
+        s1 = torch.abs(torch.stack(phi_list, dim=-1))
+
+        phi_list = []
+        for f in fs:
+            phi_list.append(
+                torch.diag_embed(deg0)
+                @ Q
+                @ torch.diag_embed(f)
+                @ Q.T
+                @ torch.diag_embed(deg1)
+                @ s1.reshape(deg0.shape[0], -1)
+            )
+        s2 = torch.abs(torch.stack(phi_list, dim=-1))
+        s2 = torch.transpose(s2, 1, 2)
+        s2_reshaped = torch.reshape(s2, (-1, self.in_channels, 4))
+        s2_swapped = torch.reshape(
+            torch.transpose(s2_reshaped, 1, 2), (-1, 16, self.in_channels)
+        )
+        s2 = s2_swapped[:, feng_filters()]
+        x = torch.cat([x[:, :, None], s1], dim=2)
+        x = torch.transpose(x, 1, 2)
+        x = torch.cat([x, s2], dim=1)
+        if self.agg == "moment":
+            if hasattr(data, "batch") and data.batch is not None:
+                x = scatter_moments(x, data.batch, 4)
+            else:
+                x = scatter_moments(
+                    x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4
+                )
+        elif self.agg is None:
+            pass
+        assert torch.all(x.isfinite())
+        return x
+
+
+def get_filter(s):
+    def filter(x, s=s):
+        # return ((1 - x) ** (s // 2) - (1 - x) ** s)
+        # return np.sqrt((1 - x) ** (s // 2) - (1 - x) ** s)
+        # return (1 - x) ** (8)
+        # return (1 - x / 2) ** (s // 2)
+        return np.sqrt(
+            np.clip((1 - x) ** (s // 2) - ((1 - x) ** s), a_min=0, a_max=None)
+        )
+
+    return filter
+
+
+class FastScatterW1(ScatterW1):
+    def __init__(self, cheb_order, *args, **kwargs):
+        self.scales = [2**i for i in range(1, 5)]
+        # self.scales = [2**i for i in range(1, 2)]
+        self.cheb_order = cheb_order
+        super().__init__(*args, **kwargs)
+
+    def _get_coeffs(self, N):
+        kernels = [get_filter(s) for s in self.scales]
+
+        # Assumes the normalized laplacian
+        a_arange = [0, 2]
+        a1 = (a_arange[1] - a_arange[0]) / 2
+        a2 = (a_arange[1] + a_arange[0]) / 2
+        c = np.zeros((len(self.scales), self.cheb_order + 1))
+        tmpN = np.arange(N)
+        num = np.cos(np.pi * (tmpN + 0.5) / N)
+        for s in range(len(self.scales)):
+            for o in range(self.cheb_order + 1):
+                c[s, o] = (
+                    2.0
+                    / N
+                    * np.dot(
+                        kernels[s](a1 * num + a2),
+                        np.cos(np.pi * o * (tmpN + 0.5) / N),
+                    )
+                )
+        return c.T
+
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index
+        if len(x.shape) == 2:
+            # Pad if no batch
+            x = x[None, :, :]
+        coeffs = torch.tensor(
+            self._get_coeffs(self.cheb_order + 1), dtype=torch.float32
+        )
+        cheb1 = ChebConvFixed(self.in_channels, coeffs, alpha=self.alpha)
+        d1 = cheb1(x, edge_index, None)
+        d1 = torch.permute(d1, (1, 2, 0, 3))
+        d1 = d1.reshape((*x.shape[:-1], -1))
+        d1 = torch.abs(d1)
+        d2 = cheb1(d1, edge_index, None)
+        d2 = torch.permute(d2, (1, 2, 0, 3))
+        d2 = d2.reshape((*x.shape[:-1], -1, x.shape[-1]))
+        d2 = d2[:, :, feng_filters()]
+        d2 = torch.abs(d2)
+        d1 = d1.reshape((*x.shape[:-1], -1, x.shape[-1]))
+        x = x.reshape((*x.shape[:-1], -1, x.shape[-1]))
+        x = torch.cat([x, d1, d2], dim=2)
+        x = x[0]
+        if self.agg == "moment":
+            if hasattr(data, "batch") and data.batch is not None:
+                x = scatter_moments(x, data.batch, 4)
+            else:
+                x = scatter_moments(
+                    x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4
+                )
+        elif self.agg is None:
+            pass
+        assert torch.all(x.isfinite())
+        return x
+
+
+class ChebConvFixed(MessagePassing):
+    def __init__(self, input_dim, coeffs, normalization="sym", alpha=0, **kwargs):
+
+        super().__init__(**kwargs)
+        self.node_dim = 1
+        assert normalization in [None, "sym", "rw"], "Invalid normalization"
+
+        self.coeffs = coeffs
+        # TODO (alex) could be faster with better broadcasting
+        # self.coeffs = self.coeffs.repeat(1, input_dim, 1)
+        self.normalization = normalization
+        self.alpha0 = -0.5 + alpha
+        self.alpha1 = -0.5 - alpha
+
+    def forward(self, x, edge_index, edge_weight, lambda_max=None):
+        # Construct lazy adjacency matrix
         if edge_weight is None:
             edge_weight = torch.ones(
                 (edge_index.size(1),), dtype=x.dtype, device=edge_index.device
             )
 
         row, col = edge_index[0], edge_index[1]
-        num_nodes = maybe_num_nodes(edge_index, num_nodes)
+        num_nodes = maybe_num_nodes(edge_index, x.size(self.node_dim))
         deg = scatter_add(edge_weight, col, dim=0, dim_size=num_nodes)
-
         deg_half = deg.pow(-0.5)
+        deg_half.masked_fill_(deg_half == float("inf"), 0)
 
         edge_weight = deg_half[row] * edge_weight * deg_half[col]
 
-        T = to_dense_adj(edge_index, edge_attr=edge_weight)
+        edge_index, edge_weight = add_self_loops(edge_index, edge_weight)
+        edge_weight = edge_weight / 2
+
         # p(K) = M^{-1} p(T) M
+        deg0 = deg.pow(self.alpha0 + 0.5)
+        deg1 = deg.pow(self.alpha1 + 0.5)
+        deg0.masked_fill_(deg0 == float("inf"), 0)
+        deg1.masked_fill_(deg1 == float("inf"), 0)
 
-        L, Q = torch.linalg.eigh(T)
+        x = deg0[None, :, None] * x
 
-        # Step 4-6: Start propagating messages.
-        propogated = self.propagate(
-            edge_index,
-            edge_weight=edge_weight,
-            size=None,
-            x=x,
+        edge_index, edge_weight = add_self_loops(edge_index, -edge_weight)
+
+        arange = [0, 1]
+
+        a1 = (arange[1] - arange[0]) / 2
+        a2 = (arange[1] + arange[0]) / 2
+
+        Tx_0 = x
+        Tx_1 = x  # Dummy.
+        assert len(x.shape) == 3
+        out = torch.einsum("ndr,s->sndr", Tx_0, self.coeffs[0] * 0.5)
+        Tx_1 = self.propagate(edge_index, x=Tx_1, norm=edge_weight, size=None)
+        Tx_1 = (Tx_1 - a2 * Tx_0) / a1
+        out = out + torch.einsum("ndr,s->sndr", Tx_1, self.coeffs[1])
+
+        for k in range(2, self.coeffs.shape[0]):
+            Tx_2 = self.propagate(edge_index, x=Tx_1, norm=edge_weight, size=None)
+            Tx_2 = (2.0 / a1) * (Tx_2 - a2 * Tx_1) - Tx_0
+            out = out + torch.einsum("ndr,s->sndr", Tx_2, self.coeffs[k])
+            Tx_0, Tx_1 = Tx_1, Tx_2
+        out = deg0[None, None, :, None] * out
+        return out
+
+    def message(self, x_j, norm):
+        return norm[:, None] * x_j
+
+    def __norm__(
+        self,
+        edge_index,
+        num_nodes: Optional[int],
+        edge_weight: OptTensor,
+        normalization: Optional[str],
+        lambda_max: OptTensor = None,
+        dtype: Optional[int] = None,
+        batch: OptTensor = None,
+    ):
+
+        # edge_index, edge_weight = remove_self_loops(edge_index, edge_weight)
+
+        edge_index, edge_weight = get_laplacian(
+            edge_index, edge_weight, normalization, dtype, num_nodes
         )
-        if not self.trainable_laziness:
-            return 0.5 * (x + propogated)
-        return self.lazy_layer(x, propogated)
 
-    def message(self, x_j, edge_weight):
-        # x_j has shape [E, out_channels]
-        # Step 4: Normalize node features.
-        return edge_weight.view(-1, 1, 1) * x_j
+        if batch is not None and lambda_max.numel() > 1:
+            lambda_max = lambda_max[batch[edge_index[0]]]
 
-    def update(self, aggr_out):
-        # aggr_out has shape [N, out_channels]
-        # Step 6: Return new node embeddings.
-        return aggr_out
+        edge_weight = (2.0 * edge_weight) / lambda_max
+        edge_weight.masked_fill_(edge_weight == float("inf"), 0)
+
+        a = lambda_max / 2
+
+        edge_index, edge_weight = add_self_loops(
+            edge_index, edge_weight, fill_value=-1.0 * a, num_nodes=num_nodes
+        )
+        edge_weight = edge_weight * a
+        assert edge_weight is not None
+
+        return edge_index, edge_weight
 
 
 class Old_Diffuse(MessagePassing):
-    """Implements low pass walk with optional weights."""
+    """Implements low pass walk with optional weights"""
 
-    def __init__(self, in_channels, out_channels, trainable_laziness=False, fixed_weights=True):
+    def __init__(
+        self, in_channels, out_channels, trainable_laziness=False, fixed_weights=True
+    ):
         super().__init__(aggr="add", node_dim=-3)  # "Add" aggregation.
         assert in_channels == out_channels
         self.trainable_laziness = trainable_laziness
@@ -304,7 +530,9 @@ class Old_Diffuse(MessagePassing):
         norm = deg_inv_sqrt[row]  # * deg_inv_sqrt[col]
 
         # Step 4-6: Start propagating messages.
-        propogated = self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, norm=norm)
+        propogated = self.propagate(
+            edge_index, size=(x.size(0), x.size(0)), x=x, norm=norm
+        )
         if not self.trainable_laziness:
             return 0.5 * (x + propogated)
         return self.lazy_layer(x, propogated)
@@ -323,7 +551,6 @@ class Old_Diffuse(MessagePassing):
 
 
 def feng_filters():
-    tmp = np.arange(16).reshape(4, 4)
     results = [4]
     for i in range(2, 4):
         for j in range(0, i):
@@ -332,7 +559,9 @@ def feng_filters():
 
 
 class Scatter(torch.nn.Module):
-    def __init__(self, in_channels, trainable_laziness=False, agg="moment", alpha=0, power=2):
+    def __init__(
+        self, in_channels, trainable_laziness=False, agg="moment", alpha=0, power=2
+    ):
         super().__init__()
         self.agg = agg
         if self.agg == "moment":
@@ -346,8 +575,6 @@ class Scatter(torch.nn.Module):
         alpha1 = -0.5 - alpha
         if power == 2:
             diffuse_module = Diffuse
-        elif power == 1:
-            diffuse_module = Diffuse_W1
         else:
             raise NotImplementedError
         self.diffusion_layer1 = diffuse_module(
@@ -382,7 +609,9 @@ class Scatter(torch.nn.Module):
         filter4 = avgs[8] - avgs[16]
         s2 = torch.abs(torch.cat([filter1, filter2, filter3, filter4], dim=1))
         s2_reshaped = torch.reshape(s2, (-1, self.in_channels, 4))
-        s2_swapped = torch.reshape(torch.transpose(s2_reshaped, 1, 2), (-1, 16, self.in_channels))
+        s2_swapped = torch.reshape(
+            torch.transpose(s2_reshaped, 1, 2), (-1, 16, self.in_channels)
+        )
         s2 = s2_swapped[:, feng_filters()]
 
         x = torch.cat([s0, s1], dim=2)
@@ -394,7 +623,9 @@ class Scatter(torch.nn.Module):
             if hasattr(data, "batch") and data.batch is not None:
                 x = scatter_moments(x, data.batch, 4)
             else:
-                x = scatter_moments(x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4)
+                x = scatter_moments(
+                    x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4
+                )
         elif self.agg is None:
             pass
         return x
@@ -410,7 +641,9 @@ class Scatter_Diffuse_Second(torch.nn.Module):
         self.in_channels = in_channels
         self.trainable_laziness = trainable_laziness
         self.diffusion_layer1 = Diffuse(in_channels, in_channels, trainable_laziness)
-        self.diffusion_layer2 = Diffuse(4 * in_channels, 4 * in_channels, trainable_laziness)
+        self.diffusion_layer2 = Diffuse(
+            4 * in_channels, 4 * in_channels, trainable_laziness
+        )
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
