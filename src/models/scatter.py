@@ -431,7 +431,7 @@ class ChebConvFixed(MessagePassing):
         deg0.masked_fill_(deg0 == float("inf"), 0)
         deg1.masked_fill_(deg1 == float("inf"), 0)
 
-        x = deg0[None, :, None] * x
+        x = deg1[None, :, None] * x
 
         edge_index, edge_weight = add_self_loops(edge_index, -edge_weight)
 
