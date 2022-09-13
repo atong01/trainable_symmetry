@@ -19,18 +19,7 @@ class FastScatterTransform:
             self.scatter_fn = ScatterW1
 
     def __call__(self, data):
-        print("dxshape", data.x.shape)
-        if self.cheb_order is not None and self.cheb_order != "None":
-            print("dxshape", data.x.shape)
-            x2 = ScatterW1(in_channels=data.x.shape[1], agg=self.agg, alpha=self.alpha)(data)
-        tmp = self.scatter_fn(in_channels=data.x.shape[1], agg=self.agg, alpha=self.alpha)(data)
-        print(x2.shape, tmp.shape)
-        print(x2)
-        print(tmp)
-        print(x2 - tmp)
-        data.x = tmp
-        exit()
-
+        data.x = self.scatter_fn(in_channels=data.x.shape[1], agg=self.agg, alpha=self.alpha)(data)
         return data
 
 
