@@ -5,12 +5,11 @@ import torch
 from torch_geometric.nn import MessagePassing
 from torch_geometric.typing import OptTensor
 from torch_geometric.utils import (
+    add_remaining_self_loops,
     add_self_loops,
     degree,
     get_laplacian,
-    remove_self_loops,
     to_dense_adj,
-    to_undirected,
 )
 from torch_geometric.utils.num_nodes import maybe_num_nodes
 from torch_scatter import scatter_add
@@ -115,8 +114,8 @@ class LazyLayer(torch.nn.Module):
         super().__init__()
         self.weights = torch.nn.Parameter(torch.Tensor(2, n))
 
-    def forward(self, x, propogated):
-        inp = torch.stack((x, propogated), dim=1)
+    def forward(self, x, propagated):
+        inp = torch.stack((x, propagated), dim=1)
         s_weights = torch.nn.functional.softmax(self.weights, dim=0)
         return torch.sum(inp * s_weights, dim=-2)
 
@@ -198,15 +197,15 @@ class Diffuse(MessagePassing):
         )
 
         # Step 4-6: Start propagating messages.
-        propogated = self.propagate(
+        propagated = self.propagate(
             edge_index,
             edge_weight=edge_weight,
             size=None,
             x=x,
         )
         if not self.trainable_laziness:
-            return 0.5 * (x + propogated)
-        return self.lazy_layer(x, propogated)
+            return 0.5 * (x + propagated)
+        return self.lazy_layer(x, propagated)
 
     def message(self, x_j, edge_weight):
         # x_j has shape [E, out_channels]
@@ -509,10 +508,10 @@ class Old_Diffuse(MessagePassing):
         norm = deg_inv_sqrt[row]  # * deg_inv_sqrt[col]
 
         # Step 4-6: Start propagating messages.
-        propogated = self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, norm=norm)
+        propagated = self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, norm=norm)
         if not self.trainable_laziness:
-            return 0.5 * (x + propogated)
-        return self.lazy_layer(x, propogated)
+            return 0.5 * (x + propagated)
+        return self.lazy_layer(x, propagated)
 
     def message(self, x_j, norm):
         # x_j has shape [E, out_channels]
