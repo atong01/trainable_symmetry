@@ -19,14 +19,17 @@ from torch_scatter import scatter_add
 # TODO (alex) this is pretty inefficient using a for loop, is there a faster way to do this?
 # TODO (alex) only scatter higher diffusions using masking
 def scatter_moments(graph, batch_indices, moments_returned=4):
-    """Compute specified statistical coefficients for each feature of each graph passed. The graphs expected are disjoint subgraphs within a single graph, whose feature tensor is passed as argument "graph."
-    "batch_indices" connects each feature tensor to its home graph.
-    "Moments_returned" specifies the number of statistical measurements to compute. If 1, only the mean is returned. If 2, the mean and variance. If 3, the mean, variance, and skew. If 4, the mean, variance, skew, and kurtosis.
-    The output is a dictionary. You can obtain the mean by calling output["mean"] or output["skew"], etc."""
+    """Compute specified statistical coefficients for each feature of each graph passed.
+
+    The graphs expected are disjoint subgraphs within a single graph, whose feature tensor is
+    passed as argument "graph." "batch_indices" connects each feature tensor to its home graph.
+    "Moments_returned" specifies the number of statistical measurements to compute. If 1, only the
+    mean is returned. If 2, the mean and variance. If 3, the mean, variance, and skew. If 4, the
+    mean, variance, skew, and kurtosis. The output is a dictionary. You can obtain the mean by
+    calling output["mean"] or output["skew"], etc.
+    """
     # Step 1: Aggregate the features of each mini-batch graph into its own tensor
-    graph_features = [
-        torch.zeros(0).to(graph) for i in range(torch.max(batch_indices) + 1)
-    ]
+    graph_features = [torch.zeros(0).to(graph) for i in range(torch.max(batch_indices) + 1)]
     for i, node_features in enumerate(
         graph
     ):  # Sort the graph features by graph, according to batch_indices. For each graph, create a tensor whose first row is the first element of each feature, etc.
@@ -59,9 +62,7 @@ def scatter_moments(graph, batch_indices, moments_returned=4):
 
         mean = torch.mean(data, dim=1, keepdim=True)
         if moments_returned >= 1:
-            statistical_moments["mean"] = torch.cat(
-                (statistical_moments["mean"], mean.T), dim=0
-            )
+            statistical_moments["mean"] = torch.cat((statistical_moments["mean"], mean.T), dim=0)
 
         # produce matrix whose every row is data row - mean of data row
 
@@ -81,9 +82,7 @@ def scatter_moments(graph, batch_indices, moments_returned=4):
 
         # skew: 3rd moment divided by cubed standard deviation (sd = sqrt variance), with correction for division by zero (inf -> 0)
         skew = m(3) / (variance ** (3 / 2))
-        skew[
-            skew > 1000000000000000
-        ] = 0  # multivalued tensor division by zero produces inf
+        skew[skew > 1000000000000000] = 0  # multivalued tensor division by zero produces inf
         skew[
             skew != skew
         ] = 0  # single valued division by 0 produces nan. In both cases we replace with 0.
@@ -107,8 +106,9 @@ def scatter_moments(graph, batch_indices, moments_returned=4):
 
 
 class LazyLayer(torch.nn.Module):
-    """Currently a single elementwise multiplication with one laziness parameter per
-    channel. this is run through a softmax so that this is a real laziness parameter
+    """Currently a single elementwise multiplication with one laziness parameter per channel.
+
+    this is run through a softmax so that this is a real laziness parameter
     """
 
     def __init__(self, n):
@@ -136,9 +136,7 @@ def gcn_norm(
     num_nodes = maybe_num_nodes(edge_index, num_nodes)
 
     if edge_weight is None:
-        edge_weight = torch.ones(
-            (edge_index.size(1),), dtype=dtype, device=edge_index.device
-        )
+        edge_weight = torch.ones((edge_index.size(1),), dtype=dtype, device=edge_index.device)
 
     if add_self_loops:
         edge_index, tmp_edge_weight = add_remaining_self_loops(
@@ -158,7 +156,7 @@ def gcn_norm(
 
 
 class Diffuse(MessagePassing):
-    """Implements low pass walk with optional weights"""
+    """Implements low pass walk with optional weights."""
 
     def __init__(
         self,
@@ -237,9 +235,7 @@ class ScatterW1(torch.nn.Module):
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
-        edge_weight = torch.ones(
-            (edge_index.size(1),), dtype=x.dtype, device=edge_index.device
-        )
+        edge_weight = torch.ones((edge_index.size(1),), dtype=x.dtype, device=edge_index.device)
 
         row, col = edge_index[0], edge_index[1]
         num_nodes = maybe_num_nodes(edge_index, x.size(0))
@@ -274,12 +270,7 @@ class ScatterW1(torch.nn.Module):
         phi_list = []
         for f in fs:
             phi_list.append(
-                torch.diag_embed(deg0)
-                @ Q
-                @ torch.diag_embed(f)
-                @ Q.T
-                @ torch.diag_embed(deg1)
-                @ x
+                torch.diag_embed(deg0) @ Q @ torch.diag_embed(f) @ Q.T @ torch.diag_embed(deg1) @ x
             )
         s1 = torch.abs(torch.stack(phi_list, dim=-1))
 
@@ -296,9 +287,7 @@ class ScatterW1(torch.nn.Module):
         s2 = torch.abs(torch.stack(phi_list, dim=-1))
         s2 = torch.transpose(s2, 1, 2)
         s2_reshaped = torch.reshape(s2, (-1, self.in_channels, 4))
-        s2_swapped = torch.reshape(
-            torch.transpose(s2_reshaped, 1, 2), (-1, 16, self.in_channels)
-        )
+        s2_swapped = torch.reshape(torch.transpose(s2_reshaped, 1, 2), (-1, 16, self.in_channels))
         s2 = s2_swapped[:, feng_filters()]
         x = torch.cat([x[:, :, None], s1], dim=2)
         x = torch.transpose(x, 1, 2)
@@ -307,9 +296,7 @@ class ScatterW1(torch.nn.Module):
             if hasattr(data, "batch") and data.batch is not None:
                 x = scatter_moments(x, data.batch, 4)
             else:
-                x = scatter_moments(
-                    x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4
-                )
+                x = scatter_moments(x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4)
         elif self.agg is None:
             pass
         assert torch.all(x.isfinite())
@@ -322,9 +309,7 @@ def get_filter(s):
         # return np.sqrt((1 - x) ** (s // 2) - (1 - x) ** s)
         # return (1 - x) ** (8)
         # return (1 - x / 2) ** (s // 2)
-        return np.sqrt(
-            np.clip((1 - x) ** (s // 2) - ((1 - x) ** s), a_min=0, a_max=None)
-        )
+        return np.sqrt(np.clip((1 - x) ** (s // 2) - ((1 - x) ** s), a_min=0, a_max=None))
 
     return filter
 
@@ -363,9 +348,7 @@ class FastScatterW1(ScatterW1):
         if len(x.shape) == 2:
             # Pad if no batch
             x = x[None, :, :]
-        coeffs = torch.tensor(
-            self._get_coeffs(self.cheb_order + 1), dtype=torch.float32
-        )
+        coeffs = torch.tensor(self._get_coeffs(self.cheb_order + 1), dtype=torch.float32)
         cheb1 = ChebConvFixed(self.in_channels, coeffs, alpha=self.alpha)
         d1 = cheb1(x, edge_index, None)
         d1 = torch.permute(d1, (1, 2, 0, 3))
@@ -384,9 +367,7 @@ class FastScatterW1(ScatterW1):
             if hasattr(data, "batch") and data.batch is not None:
                 x = scatter_moments(x, data.batch, 4)
             else:
-                x = scatter_moments(
-                    x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4
-                )
+                x = scatter_moments(x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4)
         elif self.agg is None:
             pass
         assert torch.all(x.isfinite())
@@ -494,11 +475,9 @@ class ChebConvFixed(MessagePassing):
 
 
 class Old_Diffuse(MessagePassing):
-    """Implements low pass walk with optional weights"""
+    """Implements low pass walk with optional weights."""
 
-    def __init__(
-        self, in_channels, out_channels, trainable_laziness=False, fixed_weights=True
-    ):
+    def __init__(self, in_channels, out_channels, trainable_laziness=False, fixed_weights=True):
         super().__init__(aggr="add", node_dim=-3)  # "Add" aggregation.
         assert in_channels == out_channels
         self.trainable_laziness = trainable_laziness
@@ -530,9 +509,7 @@ class Old_Diffuse(MessagePassing):
         norm = deg_inv_sqrt[row]  # * deg_inv_sqrt[col]
 
         # Step 4-6: Start propagating messages.
-        propogated = self.propagate(
-            edge_index, size=(x.size(0), x.size(0)), x=x, norm=norm
-        )
+        propogated = self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, norm=norm)
         if not self.trainable_laziness:
             return 0.5 * (x + propogated)
         return self.lazy_layer(x, propogated)
@@ -559,9 +536,7 @@ def feng_filters():
 
 
 class Scatter(torch.nn.Module):
-    def __init__(
-        self, in_channels, trainable_laziness=False, agg="moment", alpha=0, power=2
-    ):
+    def __init__(self, in_channels, trainable_laziness=False, agg="moment", alpha=0, power=2):
         super().__init__()
         self.agg = agg
         if self.agg == "moment":
@@ -609,9 +584,7 @@ class Scatter(torch.nn.Module):
         filter4 = avgs[8] - avgs[16]
         s2 = torch.abs(torch.cat([filter1, filter2, filter3, filter4], dim=1))
         s2_reshaped = torch.reshape(s2, (-1, self.in_channels, 4))
-        s2_swapped = torch.reshape(
-            torch.transpose(s2_reshaped, 1, 2), (-1, 16, self.in_channels)
-        )
+        s2_swapped = torch.reshape(torch.transpose(s2_reshaped, 1, 2), (-1, 16, self.in_channels))
         s2 = s2_swapped[:, feng_filters()]
 
         x = torch.cat([s0, s1], dim=2)
@@ -623,9 +596,7 @@ class Scatter(torch.nn.Module):
             if hasattr(data, "batch") and data.batch is not None:
                 x = scatter_moments(x, data.batch, 4)
             else:
-                x = scatter_moments(
-                    x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4
-                )
+                x = scatter_moments(x, torch.zeros(data.x.shape[0], dtype=torch.int32), 4)
         elif self.agg is None:
             pass
         return x
@@ -641,9 +612,7 @@ class Scatter_Diffuse_Second(torch.nn.Module):
         self.in_channels = in_channels
         self.trainable_laziness = trainable_laziness
         self.diffusion_layer1 = Diffuse(in_channels, in_channels, trainable_laziness)
-        self.diffusion_layer2 = Diffuse(
-            4 * in_channels, 4 * in_channels, trainable_laziness
-        )
+        self.diffusion_layer2 = Diffuse(4 * in_channels, 4 * in_channels, trainable_laziness)
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index

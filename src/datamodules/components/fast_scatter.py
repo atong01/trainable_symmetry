@@ -1,5 +1,6 @@
-from src.models.scatter import FastScatterW1, Scatter, Scatter_Diffuse_Second, ScatterW1
 from functools import partial
+
+from src.models.scatter import FastScatterW1, Scatter, Scatter_Diffuse_Second, ScatterW1
 
 
 class FastScatterTransform:
