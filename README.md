@@ -7,15 +7,16 @@
 <a href="https://hydra.cc/"><img alt="Config: Hydra" src="https://img.shields.io/badge/Config-Hydra-89b8cd"></a>
 <a href="https://github.com/ashleve/lightning-hydra-template"><img alt="Template" src="https://img.shields.io/badge/-Lightning--Hydra--Template-017F2F?style=flat&logo=github&labelColor=gray"></a><br>
 [![Paper](http://img.shields.io/badge/paper-arxiv.1911.06253-B31B1B.svg)](https://arxiv.org/abs/1911.06253)
+
 <!-- [![Conference](http://img.shields.io/badge/AnyConference-year-4b44ce.svg)](https://papers.nips.cc/paper/2020) -->
 
 </div>
 
-This is code for the paper ``Understanding Graph Neural Networks with Generalized Geometric Scattering Transforms''
+This is code for the paper \`\`Understanding Graph Neural Networks with Generalized Geometric Scattering Transforms''. For tables presented in the paper see `notebooks/results_eval.ipynb`.
 
 ## Description
 
-This code implements a generalized geometric scattering transform implemented in pytorch and pytorch lightning and configured by hydra. 
+This code implements a generalized geometric scattering transform implemented in pytorch and pytorch lightning and configured by hydra.
 
 ## How to run
 
@@ -70,7 +71,7 @@ You can override any parameter from command line like this
 python src/train.py trainer.max_epochs=20
 ```
 
-# Citation Bibtex
+# BibTex Citation
 
 ```
 @misc{perlmutter_understanding_2019,

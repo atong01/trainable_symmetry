@@ -76,8 +76,3 @@ class Standardize:
         else:
             data.x = y
         return data
-
-
-if __name__ == "__main__":
-    transforms = Compose([Eccentricity(), ClusteringCoefficient(cat=True)])
-    dataset = TUDataset(root="/tmp/tu", name="IMDB-BINARY", transform=transforms)
