@@ -38,7 +38,7 @@ conda activate myenv
 pip install -r requirements.txt
 ```
 
-Configure directories in `.env` as needed.
+Copy `.env.example` to `.env` and configure directories in `.env` as needed.
 
 To reproduce experiments in paper (also in `scripts/basic.sh`):
 
